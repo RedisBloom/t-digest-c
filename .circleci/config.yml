@@ -19,7 +19,7 @@ jobs:
       - checkout
       - run:
           name: Install CMAKE
-          command: 'apt install -y cmake'
+          command: 'apt install -y cmake --fix-missing'
       - run:
           name: Pull Submodules
           command: git submodule update --init --recursive
