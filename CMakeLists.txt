@@ -12,6 +12,7 @@ option(BUILD_BENCHMARK "Build benchmark" ON)
 option(BUILD_TESTS "Build tests" ON)
 OPTION(ENABLE_CODECOVERAGE "Enable code coverage testing support" OFF)
 OPTION(ENABLE_PROFILE "Enable code profiling support" OFF)
+option(ENABLE_FUZZER "Enable fuzz testing" OFF)
 option(BUILD_EXAMPLES "Build examples" ON)
 
 # --- Build properties ---

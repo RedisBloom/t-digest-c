@@ -4,7 +4,7 @@ version: 2.1
 jobs:
   lint:
     docker:
-      - image: redislabsmodules/llvm-toolset:latest
+      - image: silkeh/clang:12
     steps:
       - checkout
       - run:
@@ -14,12 +14,12 @@ jobs:
 
   sanitize:
     docker:
-      - image: redislabsmodules/llvm-toolset:latest
+      - image: silkeh/clang:12
     steps:
       - checkout
       - run:
           name: Install CMAKE
-          command: 'apt install -y cmake'
+          command: 'apt install -y cmake --fix-missing'
       - run:
           name: Pull Submodules
           command: git submodule update --init --recursive
