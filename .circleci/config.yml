@@ -4,7 +4,7 @@ version: 2.1
 jobs:
   lint:
     docker:
-      - image: redislabsmodules/llvm-toolset:latest
+      - image: silkeh/clang:12
     steps:
       - checkout
       - run:
@@ -14,7 +14,7 @@ jobs:
 
   sanitize:
     docker:
-      - image: redislabsmodules/llvm-toolset:latest
+      - image: silkeh/clang:12
     steps:
       - checkout
       - run:
