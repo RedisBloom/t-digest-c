@@ -162,19 +162,19 @@ int td_init(double compression, td_histogram_t **result) {
         return 1;
     }
     td_histogram_t *histogram;
-    histogram = (td_histogram_t *)__td_malloc(sizeof(td_histogram_t));
+    histogram = (td_histogram_t *)td_malloc_(sizeof(td_histogram_t));
     if (!histogram) {
         return 1;
     }
     histogram->cap = capacity;
     histogram->compression = (double)compression;
     td_reset(histogram);
-    histogram->nodes_mean = (double *)__td_calloc(capacity, sizeof(double));
+    histogram->nodes_mean = (double *)td_calloc_(capacity, sizeof(double));
     if (!histogram->nodes_mean) {
         td_free(histogram);
         return 1;
     }
-    histogram->nodes_weight = (long long *)__td_calloc(capacity, sizeof(long long));
+    histogram->nodes_weight = (long long *)td_calloc_(capacity, sizeof(long long));
     if (!histogram->nodes_weight) {
         td_free(histogram);
         return 1;
@@ -192,12 +192,12 @@ td_histogram_t *td_new(double compression) {
 
 void td_free(td_histogram_t *histogram) {
     if (histogram->nodes_mean) {
-        __td_free((void *)(histogram->nodes_mean));
+        td_free_((void *)(histogram->nodes_mean));
     }
     if (histogram->nodes_weight) {
-        __td_free((void *)(histogram->nodes_weight));
+        td_free_((void *)(histogram->nodes_weight));
     }
-    __td_free((void *)(histogram));
+    td_free_((void *)(histogram));
 }
 
 int td_merge(td_histogram_t *into, td_histogram_t *from) {
