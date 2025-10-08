@@ -1,5 +1,5 @@
 ## cmake flags
-cmake_minimum_required (VERSION 3.0)
+cmake_minimum_required (VERSION 3.10)
 project(tdigest)
 
 # CMake modules should be included in ${CMAKE_SOURCE_DIR}/cmake
