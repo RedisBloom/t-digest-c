@@ -191,6 +191,9 @@ td_histogram_t *td_new(double compression) {
 }
 
 void td_free(td_histogram_t *histogram) {
+    if (!histogram) {
+        return;
+    }
     if (histogram->nodes_mean) {
         td_free_((void *)(histogram->nodes_mean));
     }
