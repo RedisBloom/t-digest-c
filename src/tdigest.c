@@ -608,8 +608,17 @@ int td_compress(td_histogram_t *h) {
     const int overflow_res = _check_td_overflow((double)h->unmerged_weight, (double)total_weight);
     if (overflow_res != 0)
         return overflow_res;
-    if (total_weight <= 1)
+    if (total_weight <= 1) {
+        // Only move data if there are unmerged nodes to move
+        if (h->unmerged_nodes > 0) {
+            h->merged_nodes = h->merged_nodes + h->unmerged_nodes;
+            h->merged_weight = total_weight;
+            h->unmerged_nodes = 0;
+            h->unmerged_weight = 0;
+            h->total_compressions++;
+        }
         return 0;
+    }
     const double denom = 2 * MM_PI * total_weight * log(total_weight);
     if (_check_overflow(denom) != 0)
         return EDOM;
