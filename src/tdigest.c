@@ -5,6 +5,7 @@
 #include "tdigest.h"
 #include <errno.h>
 #include <stdint.h>
+#include <limits.h>
 
 #ifndef TD_MALLOC_INCLUDE
 #define TD_MALLOC_INCLUDE "td_malloc.h"
@@ -157,8 +158,13 @@ void td_reset(td_histogram_t *h) {
 
 int td_init(double compression, td_histogram_t **result) {
 
+    // cap is stored as an int. Validate compression before converting it to size_t, and reject
+    // capacities which cannot be represented by the histogram.
+    if (!isfinite(compression) || compression <= 0 || compression > INT_MAX) {
+        return 1;
+    }
     const size_t capacity = cap_from_compression(compression);
-    if (capacity < 1) {
+    if (capacity < 1 || capacity > INT_MAX) {
         return 1;
     }
     td_histogram_t *histogram;
@@ -168,7 +174,7 @@ int td_init(double compression, td_histogram_t **result) {
     }
     histogram->nodes_mean = NULL;
     histogram->nodes_weight = NULL;
-    histogram->cap = capacity;
+    histogram->cap = (int)capacity;
     histogram->compression = (double)compression;
     td_reset(histogram);
     histogram->nodes_mean = (double *)td_calloc_(capacity, sizeof(double));
