@@ -16,9 +16,20 @@ endif()
 if (BUILD_TESTS)
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -std=c99")
     add_executable(td_test unit/td_test.c unit/minunit.h)
+    # minunit.h uses clock_gettime(), hidden by the top-level -std=c99 unless
+    # _POSIX_C_SOURCE is defined on the command line before any header.
+    target_compile_definitions(td_test PRIVATE _POSIX_C_SOURCE=200809L)
     target_link_libraries(td_test tdigest m)
     enable_testing()
     add_test(td_test td_test)
+
+    # Complexity regression: compiles the library with TD_INSTRUMENT_SORT to count
+    # key comparisons and asserts one large compress stays O(n log n) (MOD-17228).
+    add_executable(td_sort_complexity_test unit/td_sort_complexity_test.c)
+    target_include_directories(td_sort_complexity_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_definitions(td_sort_complexity_test PRIVATE TD_INSTRUMENT_SORT)
+    target_link_libraries(td_sort_complexity_test m)
+    add_test(td_sort_complexity_test td_sort_complexity_test)
 endif()
 
 

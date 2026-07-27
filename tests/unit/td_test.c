@@ -634,6 +634,43 @@ MU_TEST(test_duplicate_heavy_compress) {
     td_free(desc);
 }
 
+// Weighted duplicates exercise how runs of equal keys are merged after sorting.
+// The introsort changes the intra-run order relative to a naive single-pivot
+// sort (so the digest is NOT centroid-for-centroid identical), but the result
+// must stay accurate. Uses a distribution whose quantiles are known exactly.
+MU_TEST(test_weighted_duplicates_accuracy) {
+    td_histogram_t *t = td_new(200);
+    mu_assert(t != NULL, "created_histogram");
+    // 5 distinct values, each carrying equal weight, inserted as several weighted
+    // duplicates so the same mean appears in multiple centroids before merging.
+    const double vals[5] = {1.0, 2.0, 3.0, 4.0, 5.0};
+    long long total = 0;
+    for (int rep = 0; rep < 4; ++rep) {
+        for (int i = 0; i < 5; ++i) {
+            mu_assert(td_add(t, vals[i], 150) == 0, "weighted duplicate insertion");
+            total += 150;
+        }
+    }
+    mu_assert(td_compress(t) == 0, "compress");
+    mu_assert_double_eq(1.0, td_min(t));
+    mu_assert_double_eq(5.0, td_max(t));
+    mu_assert_long_eq(total, td_size(t)); // 3000, weight fully accounted
+    // Each value holds exactly 20% of the mass, so the median is 3 and the
+    // quantiles land on the values (within interpolation tolerance).
+    mu_assert_double_eq_epsilon(1.0, td_quantile(t, 0.05), 0.6);
+    mu_assert_double_eq_epsilon(3.0, td_quantile(t, 0.5), 0.6);
+    mu_assert_double_eq_epsilon(5.0, td_quantile(t, 0.95), 0.6);
+    // CDF stays in [0,1] and non-decreasing across the support.
+    double prev = -1.0;
+    for (double x = 0.0; x <= 6.0; x += 0.5) {
+        const double c = td_cdf(t, x);
+        mu_assert(c >= 0.0 && c <= 1.0, "cdf within [0,1]");
+        mu_assert(c >= prev - 1e-9, "cdf non-decreasing");
+        prev = c;
+    }
+    td_free(t);
+}
+
 MU_TEST_SUITE(test_suite) {
     MU_RUN_TEST(test_basic);
     MU_RUN_TEST(test_td_init);
@@ -656,6 +693,7 @@ MU_TEST_SUITE(test_suite) {
     MU_RUN_TEST(test_overflow);
     MU_RUN_TEST(test_overflow_merge);
     MU_RUN_TEST(test_duplicate_heavy_compress);
+    MU_RUN_TEST(test_weighted_duplicates_accuracy);
 }
 
 int main(int argc, char *argv[]) {
