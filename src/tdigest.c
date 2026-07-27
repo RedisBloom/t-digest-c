@@ -197,6 +197,12 @@ td_histogram_t *td_new(double compression) {
 }
 
 void td_free(td_histogram_t *histogram) {
+    // This guard is required by the capacity validation added in this PR: td_new()
+    // now returns NULL for invalid compression (non-finite / <= 0 / cap > INT_MAX),
+    // so the idiomatic td_free(td_new(bad)) cleanup would otherwise dereference NULL.
+    if (!histogram) {
+        return;
+    }
     if (histogram->nodes_mean) {
         td_free_((void *)(histogram->nodes_mean));
     }
