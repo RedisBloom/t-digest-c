@@ -84,8 +84,8 @@ static double compares_all_equal(int n) {
 
 /* Part B: run the heapsort fallback directly on reverse-sorted input; return the comparisons. */
 static double compares_heapsort(int n) {
-    double *m = (double *)malloc((size_t)n * sizeof(double));
-    long long *w = (long long *)malloc((size_t)n * sizeof(long long));
+    double *m = (double *)calloc((size_t)n, sizeof(double));
+    long long *w = (long long *)calloc((size_t)n, sizeof(long long));
     if (m == NULL || w == NULL) {
         fprintf(stderr, "allocation failed at n=%d\n", n);
         exit(1);
@@ -126,7 +126,8 @@ int main(void) {
     /* Part B: heapsort fallback must be O(n log n). Measured ~1.78 n log2 n; bound 4 n log2 n.
      * Also assert the normalized ratio stays roughly flat (a quadratic path would blow up). */
     printf("Part B - heapsort fallback, must be O(n log n):\n");
-    double max_ratio = 0.0, min_ratio = 1e300;
+    double max_ratio = 0.0;
+    double min_ratio = 1e300;
     for (int i = 0; i < nsizes; ++i) {
         const int n = sizes[i];
         const double c = compares_heapsort(n);

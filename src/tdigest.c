@@ -57,6 +57,14 @@ unsigned long long td_sort_comparisons = 0;
 #define TD_SORT_CMP() ((void)0)
 #endif
 
+// Counted key comparison `a < b`. Keeping the counter inside a dedicated helper (instead of a
+// comma expression in the && operands) leaves the sort's boolean conditions side-effect free;
+// it inlines to a plain `a < b` when TD_INSTRUMENT_SORT is off.
+static inline bool td_key_lt(double a, double b) {
+    TD_SORT_CMP();
+    return a < b;
+}
+
 #define TD_INSORT_THRESHOLD 16
 
 // Insertion sort of the inclusive range [lo, hi] (used for small ranges).
@@ -65,7 +73,7 @@ static void td_insertion_sort(double *means, long long *weights, int lo, int hi)
         const double m = means[i];
         const long long w = weights[i];
         int j = i - 1;
-        while (j >= lo && (TD_SORT_CMP(), means[j] > m)) {
+        while (j >= lo && td_key_lt(m, means[j])) {
             means[j + 1] = means[j];
             weights[j + 1] = weights[j];
             j--;
@@ -83,10 +91,10 @@ static void td_sift_down(double *means, long long *weights, int lo, int i, int n
     // capacity #41 permits): for i < n/2, 2*i < n so 2*i+1 <= n and cannot overflow.
     while (i < n / 2) {
         int child = 2 * i + 1;
-        if (child + 1 < n && (TD_SORT_CMP(), means[lo + child] < means[lo + child + 1])) {
+        if (child + 1 < n && td_key_lt(means[lo + child], means[lo + child + 1])) {
             child++;
         }
-        if (!(TD_SORT_CMP(), means[lo + i] < means[lo + child])) {
+        if (!td_key_lt(means[lo + i], means[lo + child])) {
             break;
         }
         swap(means, lo + i, lo + child);
@@ -111,15 +119,15 @@ static void td_heap_sort(double *means, long long *weights, int lo, int hi) {
 // Move the median of means[lo], means[mid], means[hi] into `mid` (weights follow)
 // and return it, so an already-sorted / organ-pipe input does not pick a bad pivot.
 static double td_median3(double *means, long long *weights, int lo, int mid, int hi) {
-    if ((TD_SORT_CMP(), means[mid] < means[lo])) {
+    if (td_key_lt(means[mid], means[lo])) {
         swap(means, lo, mid);
         swap_l(weights, lo, mid);
     }
-    if ((TD_SORT_CMP(), means[hi] < means[lo])) {
+    if (td_key_lt(means[hi], means[lo])) {
         swap(means, lo, hi);
         swap_l(weights, lo, hi);
     }
-    if ((TD_SORT_CMP(), means[hi] < means[mid])) {
+    if (td_key_lt(means[hi], means[mid])) {
         swap(means, mid, hi);
         swap_l(weights, mid, hi);
     }
@@ -154,15 +162,17 @@ static void td_introsort(double *means, long long *weights, int lo, int hi, int 
         const int mid = lo + (hi - lo) / 2;
         const double pivot = td_median3(means, weights, lo, mid, hi);
         // While scanning: [lo, lt) < pivot, [lt, i) == pivot, (gt, hi] > pivot.
-        int lt = lo, i = lo, gt = hi;
+        int lt = lo;
+        int i = lo;
+        int gt = hi;
         while (i <= gt) {
             const double v = means[i];
-            if ((TD_SORT_CMP(), v < pivot)) {
+            if (td_key_lt(v, pivot)) {
                 swap(means, i, lt);
                 swap_l(weights, i, lt);
                 lt++;
                 i++;
-            } else if ((TD_SORT_CMP(), v > pivot)) {
+            } else if (td_key_lt(pivot, v)) {
                 swap(means, i, gt);
                 swap_l(weights, i, gt);
                 gt--;
