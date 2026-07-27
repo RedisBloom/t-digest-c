@@ -2,11 +2,14 @@
  * Capacity-boundary regression for td_init (follow-up to #41 / #44).
  *
  * The accepted side of the capacity guard is the largest compression whose node capacity
- * (cap = 6*compression + 10) still fits in an int: floor((INT_MAX - 10) / 6). Verifying it
- * through td_new()/td_init() is impractical because that compression allocates ~17 GB of
- * backing arrays (2 * INT_MAX elements). This test instead includes the translation unit and
- * drives the factored, allocation-free helper capacity_from_compression() directly, so the
- * exact boundary (and one past it) is checked without committing tens of GiB.
+ * (cap = 6*compression + 10) still fits within every limit the helper enforces: INT_MAX and the
+ * per-array element counts SIZE_MAX/sizeof(double) and SIZE_MAX/sizeof(long long). On a 64-bit
+ * size_t target INT_MAX binds; on a 32-bit size_t target the SIZE_MAX/8 element limit is smaller
+ * and binds instead, so the boundary is derived from the minimum rather than assuming INT_MAX.
+ * Verifying it through td_new()/td_init() is impractical because at cap ~ INT_MAX the two 8-byte
+ * node arrays total ~34 GB (~32 GiB). This test instead includes the translation unit and drives
+ * the factored, allocation-free helper capacity_from_compression() directly, so the exact
+ * boundary (and one past it) is checked without committing tens of GiB.
  */
 #include <limits.h>
 #include <math.h>
@@ -26,14 +29,25 @@ static int failures = 0;
     } while (0)
 
 int main(void) {
-    /* The largest integer compression whose capacity still fits in an int. */
-    const long long max_ok = (long long)((INT_MAX - 10) / 6);
+    /* The binding capacity limit is the minimum of every check the helper enforces:
+     * INT_MAX and the per-array element counts SIZE_MAX/sizeof(double|long long). On 64-bit
+     * size_t this is INT_MAX; on 32-bit size_t it is the (smaller) SIZE_MAX/8. */
+    uint64_t max_capacity = (uint64_t)INT_MAX;
+    if (SIZE_MAX / sizeof(double) < max_capacity) {
+        max_capacity = (uint64_t)(SIZE_MAX / sizeof(double));
+    }
+    if (SIZE_MAX / sizeof(long long) < max_capacity) {
+        max_capacity = (uint64_t)(SIZE_MAX / sizeof(long long));
+    }
 
-    /* Sanity on the arithmetic: this capacity must fit in int, the next one must not. */
+    /* The largest integer compression whose capacity still fits within max_capacity. */
+    const long long max_ok = (long long)((max_capacity - 10) / 6);
+
+    /* Sanity on the arithmetic: this capacity must be within the limit, the next one must not. */
     const uint64_t cap_ok = cap_from_compression((uint64_t)max_ok);
     const uint64_t cap_over = cap_from_compression((uint64_t)(max_ok + 1));
-    CHECK(cap_ok <= (uint64_t)INT_MAX, "boundary capacity should fit in int");
-    CHECK(cap_over > (uint64_t)INT_MAX, "boundary+1 capacity should exceed int");
+    CHECK(cap_ok <= max_capacity, "boundary capacity should be within the binding limit");
+    CHECK(cap_over > max_capacity, "boundary+1 capacity should exceed the binding limit");
 
     const size_t SENTINEL = (size_t)0xA5A5A5A5A5A5A5A5ULL;
     size_t cap;

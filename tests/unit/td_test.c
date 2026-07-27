@@ -521,9 +521,9 @@ MU_TEST(test_td_init) {
     mu_assert_long_eq(0, td_init(1000000, &t));
     td_free(t);
 
-    // The exact accepted/rejected capacity boundary ((INT_MAX-10)/6) is covered by
-    // td_capacity_test, which exercises the no-alloc capacity helper directly instead of
-    // committing the ~17 GB the largest accepted compression would allocate here.
+    // The exact accepted/rejected capacity boundary is covered by td_capacity_test, which
+    // exercises the no-alloc capacity helper directly instead of committing the ~34 GB (~32 GiB)
+    // the largest accepted compression would allocate here.
 }
 
 MU_TEST(test_quantiles) {

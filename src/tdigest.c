@@ -107,7 +107,7 @@ static inline uint64_t cap_from_compression(uint64_t compression) {
 // Validate `compression` and compute the node-array capacity (cap = 6*compression + 10)
 // entirely in 64-bit width, WITHOUT allocating. Factored out of td_init() so the
 // accepted/rejected boundary can be probed in a test without committing tens of GiB of
-// backing storage (the largest accepted compression allocates ~17 GB of nodes).
+// backing storage (at cap ~ INT_MAX the two 8-byte node arrays total ~34 GB / ~32 GiB).
 // Returns 0 and writes *capacity on success; returns 1 on rejection and leaves *capacity
 // untouched. Rejections: non-finite, <= 0, > INT_MAX, or a capacity that would overflow int
 // or a size_t element count for either node array.
