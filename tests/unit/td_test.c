@@ -413,6 +413,31 @@ MU_TEST(test_nans) {
     td_free(t);
 }
 
+// td_add() rejects NaN (no total order for the centroid sort) but accepts +/-Inf, which have a
+// valid ordering and become min/max. After mixing infinities with finite values, one big
+// compress must still leave the centroids sorted.
+MU_TEST(test_add_nonfinite) {
+    td_histogram_t *t = td_new(200);
+    mu_assert(td_add(t, NAN, 1) == EINVAL, "td_add(NaN) must be rejected with EINVAL");
+    mu_assert(td_centroid_count(t) == 0, "rejected NaN must not be stored");
+
+    mu_assert(td_add(t, -INFINITY, 1) == 0, "td_add(-Inf) must be accepted");
+    mu_assert(td_add(t, INFINITY, 1) == 0, "td_add(+Inf) must be accepted");
+    for (int i = 0; i < 50; ++i) {
+        mu_assert(td_add(t, (double)(i - 25), 1) == 0, "finite insertion");
+    }
+    mu_assert(td_add(t, NAN, 1) == EINVAL, "td_add(NaN) still rejected after other inserts");
+    mu_assert(td_compress(t) == 0, "compress with infinities present");
+    mu_assert(td_min(t) == -INFINITY, "min must be -Inf");
+    mu_assert(td_max(t) == INFINITY, "max must be +Inf");
+    const long long n = td_centroid_count(t);
+    for (long long i = 1; i < n; ++i) {
+        mu_assert(td_centroids_mean_at(t, (int)(i - 1)) <= td_centroids_mean_at(t, (int)i),
+                  "centroids must stay sorted with infinities present");
+    }
+    td_free(t);
+}
+
 MU_TEST(test_two_interp) {
     td_histogram_t *t = td_new(1000);
     mu_assert(td_add(t, 1, 1) == 0, "Insertion");
@@ -678,6 +703,7 @@ MU_TEST_SUITE(test_suite) {
     MU_RUN_TEST(test_compress_small);
     MU_RUN_TEST(test_compress_large);
     MU_RUN_TEST(test_nans);
+    MU_RUN_TEST(test_add_nonfinite);
     MU_RUN_TEST(test_negative_values);
     MU_RUN_TEST(test_negative_values_merge);
     MU_RUN_TEST(test_large_outlier_test);

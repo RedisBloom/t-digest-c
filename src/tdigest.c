@@ -78,11 +78,11 @@ static void td_insertion_sort(double *means, long long *weights, int lo, int hi)
 // Max-heap sift-down over the range starting at `lo` (heap size `n`, root heap
 // index `i`), keyed on means with weights moved in lock-step.
 static void td_sift_down(double *means, long long *weights, int lo, int i, int n) {
-    for (;;) {
+    // Internal nodes are [0, n/2); index >= n/2 is a leaf. Testing leaf-ness BEFORE forming
+    // 2*i+1 keeps the child index from overflowing signed int when n approaches INT_MAX (a
+    // capacity #41 permits): for i < n/2, 2*i < n so 2*i+1 <= n and cannot overflow.
+    while (i < n / 2) {
         int child = 2 * i + 1;
-        if (child >= n) {
-            break;
-        }
         if (child + 1 < n && (TD_SORT_CMP(), means[lo + child] < means[lo + child + 1])) {
             child++;
         }
@@ -670,6 +670,14 @@ double td_trimmed_mean(td_histogram_t *h, double leftmost_cut, double rightmost_
 }
 
 int td_add(td_histogram_t *h, double mean, long long weight) {
+    // Reject NaN before any mutation: the centroid sort assumes a total order over the stored
+    // means, but NaN compares false to everything, so a NaN key would leave a partition
+    // unsorted and violate td_compress()'s sorted invariant. This matches the reference
+    // t-digest, which rejects NaN in add(). +/-Inf are permitted -- they have a valid total
+    // order and are clamped into min/max.
+    if (isnan(mean)) {
+        return EINVAL;
+    }
     if (should_td_compress(h)) {
         const int overflow_res = td_compress(h);
         if (overflow_res != 0)

@@ -26,7 +26,8 @@ if (BUILD_TESTS)
     # Complexity regression: compiles the library with TD_INSTRUMENT_SORT to count
     # key comparisons and asserts one large compress stays O(n log n) (MOD-17228).
     add_executable(td_sort_complexity_test unit/td_sort_complexity_test.c)
-    target_include_directories(td_sort_complexity_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    # CMAKE_CURRENT_LIST_DIR so the src path stays correct under add_subdirectory().
+    target_include_directories(td_sort_complexity_test PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../src)
     target_compile_definitions(td_sort_complexity_test PRIVATE TD_INSTRUMENT_SORT)
     target_link_libraries(td_sort_complexity_test m)
     add_test(td_sort_complexity_test td_sort_complexity_test)

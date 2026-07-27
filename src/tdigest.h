@@ -100,10 +100,11 @@ void td_reset(td_histogram_t *h);
 /**
  * Adds a sample to a histogram.
  *
- * @param val The value to add.
+ * @param val The value to add. Must not be NaN (NaN has no ordering and would break the
+ * centroid sort); +/-Inf are accepted.
  * @param weight The weight of this point.
- * @return 0 on success, EDOM if overflow was detected as a consequence of adding the provided
- * weight.
+ * @return 0 on success, EINVAL if val is NaN, EDOM if overflow was detected as a consequence of
+ * adding the provided weight.
  *
  */
 int td_add(td_histogram_t *h, double val, long long weight);
