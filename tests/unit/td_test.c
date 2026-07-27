@@ -506,10 +506,14 @@ MU_TEST(test_td_init) {
     mu_assert(t == NULL, "infinite compression should not allocate a histogram");
     mu_assert_long_eq(1, td_init(-1, &t));
     mu_assert(t == NULL, "negative compression should not allocate a histogram");
+    mu_assert_long_eq(1, td_init(0, &t));
+    mu_assert(t == NULL, "zero compression should not allocate a histogram");
 
     const double overflowing_compression = (double)(((INT_MAX - 10) / 6) + 1);
     mu_assert_long_eq(1, td_init(overflowing_compression, &t));
     mu_assert(t == NULL, "capacity above INT_MAX should not allocate a histogram");
+    mu_assert_long_eq(1, td_init((double)INT_MAX, &t));
+    mu_assert(t == NULL, "64-bit capacity calculation should reject INT_MAX compression");
 
     mu_assert_long_eq(0, td_init(1000, &t));
     td_free(t);
