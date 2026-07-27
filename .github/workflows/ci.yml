@@ -5,6 +5,13 @@ on:
     branches: [master]
   pull_request:
 
+# Least privilege: the workflow only needs to read the repository. The repo
+# default is `write`, so scope it down explicitly and drop the checkout token
+# after fetch, so pull-request-controlled build/test steps never see a
+# write-capable token.
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     name: build + unit tests (${{ matrix.cc }})
@@ -17,6 +24,8 @@ jobs:
       CC: ${{ matrix.cc }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Configure
         run: >
           cmake -S . -B build
@@ -32,6 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Build td_test with ASan + UBSan
         run: >
           clang -O1 -g -std=gnu11
