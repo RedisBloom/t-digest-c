@@ -57,6 +57,7 @@ int main(void) {
         if (td_add(h, killer[i], 1) != 0) {
             fprintf(stderr, "td_add failed at %d\n", i);
             free(killer);
+            td_free(h);
             return 1;
         }
     }
@@ -64,12 +65,14 @@ int main(void) {
     if (h->unmerged_nodes != n) {
         fprintf(stderr, "expected one big compress, but auto-compress ran (unmerged=%d)\n",
                 h->unmerged_nodes);
+        td_free(h);
         return 1;
     }
 
     td_sort_comparisons = 0;
     if (td_compress(h) != 0) {
         fprintf(stderr, "compress failed\n");
+        td_free(h);
         return 1;
     }
 

@@ -662,7 +662,8 @@ MU_TEST(test_weighted_duplicates_accuracy) {
     mu_assert_double_eq_epsilon(5.0, td_quantile(t, 0.95), 0.6);
     // CDF stays in [0,1] and non-decreasing across the support.
     double prev = -1.0;
-    for (double x = 0.0; x <= 6.0; x += 0.5) {
+    for (int step = 0; step <= 12; ++step) {
+        const double x = 0.5 * (double)step;
         const double c = td_cdf(t, x);
         mu_assert(c >= 0.0 && c <= 1.0, "cdf within [0,1]");
         mu_assert(c >= prev - 1e-9, "cdf non-decreasing");
