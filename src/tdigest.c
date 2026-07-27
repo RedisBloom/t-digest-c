@@ -48,54 +48,64 @@ static void inline swap_l(long long *arr, int i, int j) {
     arr[j] = temp;
 }
 
-static unsigned int partition(double *means, long long *weights, unsigned int start,
-                              unsigned int end, unsigned int pivot_idx) {
-    const double pivotMean = means[pivot_idx];
-    swap(means, pivot_idx, end);
-    swap_l(weights, pivot_idx, end);
-
-    int i = start - 1;
-
-    for (unsigned int j = start; j < end; j++) {
-        // If current element is smaller than the pivot
-        if (means[j] < pivotMean) {
-            // increment index of smaller element
-            i++;
-            swap(means, i, j);
-            swap_l(weights, i, j);
-        }
-    }
-    swap(means, i + 1, end);
-    swap_l(weights, i + 1, end);
-    return i + 1;
-}
-
 /**
- * Standard quick sort except that sorting rearranges parallel arrays
+ * Quicksort that rearranges two parallel arrays, keyed on `means`.
  *
- * @param means  Values to sort on
- * @param weights The auxillary values to sort.
- * @param start  The beginning of the values to sort
- * @param end    The value after the last value to sort
+ * Uses 3-way (Dutch-national-flag) partitioning with tail-recursion elimination.
+ *
+ * The previous single-pivot version was quadratic in time and linear in stack
+ * depth on duplicate / low-cardinality input -- which is t-digest's *common*
+ * case, since it summarizes streams of repeated measurements, not an adversarial
+ * one. A run of equal keys made the central pivot peel one element per level:
+ * O(n^2) comparisons and an O(n) recursion depth. 3-way partitioning collapses
+ * each run of equal keys in a single pass, and recursing only into the smaller
+ * side bounds the stack to O(log n). Output is identical to the old sort.
+ *
+ * @param means   Values to sort on.
+ * @param weights The parallel array, permuted in lock-step.
+ * @param lo, hi  Inclusive bounds of the range to sort.
  */
-static void td_qsort(double *means, long long *weights, unsigned int start, unsigned int end) {
-    if (start < end) {
-        // two elements can be directly compared
-        if ((end - start) == 1) {
-            if (means[start] > means[end]) {
-                swap(means, start, end);
-                swap_l(weights, start, end);
+static void td_qsort(double *means, long long *weights, unsigned int lo_u, unsigned int hi_u) {
+    // Signed locals so the partition pointers can pass below `lo` without an
+    // unsigned underflow. Indices fit an int: the node arrays are sized by `cap`
+    // (an int field), so the range sorted is always within [0, node_count).
+    int lo = (int)lo_u;
+    int hi = (int)hi_u;
+    while (lo < hi) {
+        // Capture the pivot by value: the partition swaps will move means[mid].
+        const double pivot = means[lo + (hi - lo) / 2];
+        // While scanning: [lo, lt) < pivot, [lt, i) == pivot, (gt, hi] > pivot,
+        // and [i, gt] is still unclassified.
+        int lt = lo, i = lo, gt = hi;
+        while (i <= gt) {
+            if (means[i] < pivot) {
+                swap(means, i, lt);
+                swap_l(weights, i, lt);
+                lt++;
+                i++;
+            } else if (means[i] > pivot) {
+                swap(means, i, gt);
+                swap_l(weights, i, gt);
+                gt--;
+            } else {
+                i++;
             }
-            return;
         }
-        // generating a random number as a pivot was very expensive vs the array size
-        // const unsigned int pivot_idx = start + rand()%(end - start + 1);
-        const unsigned int pivot_idx = (end + start) / 2; // central pivot
-        const unsigned int new_pivot_idx = partition(means, weights, start, end, pivot_idx);
-        if (new_pivot_idx > start) {
-            td_qsort(means, weights, start, new_pivot_idx - 1);
+        // Now [lo, lt) < pivot, [lt, gt] == pivot (done), (gt, hi] > pivot.
+        const int left_size = lt - lo;   // count of elements < pivot
+        const int right_size = hi - gt;  // count of elements > pivot
+        // Recurse into the smaller side, loop on the larger (bounds stack depth).
+        if (left_size < right_size) {
+            if (left_size > 1) {
+                td_qsort(means, weights, (unsigned int)lo, (unsigned int)(lt - 1));
+            }
+            lo = gt + 1;
+        } else {
+            if (right_size > 1) {
+                td_qsort(means, weights, (unsigned int)(gt + 1), (unsigned int)hi);
+            }
+            hi = lt - 1;
         }
-        td_qsort(means, weights, new_pivot_idx + 1, end);
     }
 }
 

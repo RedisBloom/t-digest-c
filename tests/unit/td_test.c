@@ -580,6 +580,60 @@ MU_TEST(test_quantiles_multiple) {
     td_free(t);
 }
 
+// Exercises the centroid sort on the inputs that were pathological for the old
+// single-pivot quicksort: all-equal, ascending, and descending. The 3-way sort
+// must produce a correctly ordered, correct-weight digest for each. (The old
+// sort was O(n^2)/O(n)-stack on the all-equal case; this guards correctness of
+// the replacement.)
+MU_TEST(test_duplicate_heavy_compress) {
+    const int n = 50000;
+
+    // All-equal: everything collapses onto a single value.
+    td_histogram_t *eq = td_new(200);
+    mu_assert(eq != NULL, "created_histogram");
+    for (int i = 0; i < n; ++i) {
+        mu_assert(td_add(eq, 42.0, 1) == 0, "Insertion");
+    }
+    mu_assert(td_compress(eq) == 0, "compress all-equal");
+    mu_assert_double_eq((double)n, td_size(eq));
+    mu_assert_double_eq(42.0, td_min(eq));
+    mu_assert_double_eq(42.0, td_max(eq));
+    mu_assert_double_eq(42.0, td_quantile(eq, 0.0));
+    mu_assert_double_eq(42.0, td_quantile(eq, 0.5));
+    mu_assert_double_eq(42.0, td_quantile(eq, 1.0));
+    // Merged centroid means must be non-decreasing.
+    for (int i = 1; i < eq->merged_nodes; ++i) {
+        mu_assert(eq->nodes_mean[i - 1] <= eq->nodes_mean[i], "means sorted (all-equal)");
+    }
+    td_free(eq);
+
+    // Ascending and descending must yield the same digest bounds.
+    td_histogram_t *asc = td_new(200);
+    td_histogram_t *desc = td_new(200);
+    mu_assert(asc != NULL && desc != NULL, "created_histograms");
+    for (int i = 0; i < n; ++i) {
+        mu_assert(td_add(asc, (double)i, 1) == 0, "Insertion asc");
+        mu_assert(td_add(desc, (double)(n - 1 - i), 1) == 0, "Insertion desc");
+    }
+    mu_assert(td_compress(asc) == 0, "compress asc");
+    mu_assert(td_compress(desc) == 0, "compress desc");
+    mu_assert_double_eq(0.0, td_min(asc));
+    mu_assert_double_eq((double)(n - 1), td_max(asc));
+    mu_assert_double_eq(0.0, td_min(desc));
+    mu_assert_double_eq((double)(n - 1), td_max(desc));
+    for (int i = 1; i < asc->merged_nodes; ++i) {
+        mu_assert(asc->nodes_mean[i - 1] <= asc->nodes_mean[i], "means sorted (asc)");
+    }
+    for (int i = 1; i < desc->merged_nodes; ++i) {
+        mu_assert(desc->nodes_mean[i - 1] <= desc->nodes_mean[i], "means sorted (desc)");
+    }
+    // The median of a dense uniform 0..n-1 sits near the middle for both orders.
+    mu_assert_double_eq_epsilon((double)(n - 1) / 2.0, td_quantile(asc, 0.5), (double)n * 0.02);
+    mu_assert_double_eq_epsilon((double)(n - 1) / 2.0, td_quantile(desc, 0.5), (double)n * 0.02);
+    td_free(asc);
+    td_free(desc);
+}
+
 MU_TEST_SUITE(test_suite) {
     MU_RUN_TEST(test_basic);
     MU_RUN_TEST(test_td_init);
@@ -601,6 +655,7 @@ MU_TEST_SUITE(test_suite) {
     MU_RUN_TEST(test_trimmed_mean_complex);
     MU_RUN_TEST(test_overflow);
     MU_RUN_TEST(test_overflow_merge);
+    MU_RUN_TEST(test_duplicate_heavy_compress);
 }
 
 int main(int argc, char *argv[]) {
