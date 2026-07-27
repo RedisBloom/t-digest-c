@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: build + unit tests (${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTS=ON -DBUILD_BENCHMARK=OFF -DBUILD_EXAMPLES=OFF
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    name: ASan + UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build td_test with ASan + UBSan
+        run: >
+          clang -O1 -g -std=gnu11
+          -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+          -Isrc tests/unit/td_test.c src/tdigest.c -lm -o td_test_san
+      - name: Run
+        env:
+          # A fuzzed/huge compression can request an enormous capacity; let the
+          # library's allocation-failure path run instead of aborting the process.
+          ASAN_OPTIONS: detect_leaks=1:allocator_may_return_null=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ./td_test_san
