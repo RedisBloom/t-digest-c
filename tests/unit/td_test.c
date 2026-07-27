@@ -521,8 +521,9 @@ MU_TEST(test_td_init) {
     mu_assert_long_eq(0, td_init(1000000, &t));
     td_free(t);
 
-    mu_assert_long_eq(0, td_init(100000000, &t));
-    td_free(t);
+    // The exact accepted/rejected capacity boundary ((INT_MAX-10)/6) is covered by
+    // td_capacity_test, which exercises the no-alloc capacity helper directly instead of
+    // committing the ~17 GB the largest accepted compression would allocate here.
 }
 
 MU_TEST(test_quantiles) {
@@ -673,7 +674,12 @@ MU_TEST(test_td_init_large_success_is_usable) {
     mu_assert_double_eq(10000.0, td_max(t));
     mu_assert_long_eq(10000, td_size(t));
     mu_assert(td_centroid_count(t) <= t->cap, "centroid count must stay within cap");
-    mu_assert_double_eq_epsilon(5000.5, td_quantile(t, 0.5), 50.0);
+    // Store the result and assert it is finite first: mu_assert_double_eq_epsilon does NOT fail
+    // for NaN (fabs(expected - NaN) is NaN, and NaN > epsilon is false), so the epsilon check
+    // alone would pass even if td_quantile() returned NaN.
+    const double median = td_quantile(t, 0.5);
+    mu_assert(isfinite(median), "median must be finite");
+    mu_assert_double_eq_epsilon(5000.5, median, 50.0);
     td_free(t);
 }
 

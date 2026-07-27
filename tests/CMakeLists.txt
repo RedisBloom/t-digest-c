@@ -19,6 +19,14 @@ if (BUILD_TESTS)
     target_link_libraries(td_test tdigest m)
     enable_testing()
     add_test(td_test td_test)
+
+    # Capacity-boundary regression: includes tdigest.c to drive the allocation-free
+    # capacity_from_compression() helper at the exact accepted/rejected boundary
+    # (floor((INT_MAX-10)/6)) without allocating the ~17 GB that compression would need.
+    add_executable(td_capacity_test unit/td_capacity_test.c)
+    target_include_directories(td_capacity_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(td_capacity_test m)
+    add_test(td_capacity_test td_capacity_test)
 endif()
 
 
