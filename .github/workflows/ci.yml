@@ -48,11 +48,13 @@ jobs:
           persist-credentials: false
       # Build the whole test suite with sanitizers via CMake and run it through
       # CTest, so every registered test target (not just td_test) is covered by
-      # ASan/UBSan. A non-Release build avoids the top-level "-std=c99" that would
-      # otherwise hide POSIX clock_gettime() in minunit.h.
+      # ASan/UBSan. Build type is Debug on purpose: the project defaults to Release,
+      # whose top-level "-std=c99" hides POSIX clock_gettime() in minunit.h, so an
+      # explicit Debug build keeps every test target compilable here.
       - name: Configure with ASan + UBSan
         run: >
           cmake -S . -B build-san
+          -DCMAKE_BUILD_TYPE=Debug
           -DBUILD_TESTS=ON -DBUILD_BENCHMARK=OFF -DBUILD_EXAMPLES=OFF
           -DCMAKE_C_FLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
