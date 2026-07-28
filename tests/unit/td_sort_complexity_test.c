@@ -193,8 +193,8 @@ static void mirror_qsort(int *a, int lo, int hi) {
 
 /* Fill out[0..n-1] with the killer permutation for the real td_qsort. */
 static void gen_killer(int n, double *out) {
-    g_val = (int *)malloc((size_t)n * sizeof(int));
-    int *a = (int *)malloc((size_t)n * sizeof(int));
+    g_val = (int *)calloc((size_t)n, sizeof(int));
+    int *a = (int *)calloc((size_t)n, sizeof(int));
     if (g_val == NULL || a == NULL) {
         fprintf(stderr, "allocation failed at n=%d\n", n);
         exit(1);
@@ -220,7 +220,7 @@ static void gen_killer(int n, double *out) {
 
 /* Sort the killer through the real td_compress()/td_qsort(); report comparisons + fallbacks. */
 static double compares_killer(int n, unsigned long long *fallbacks_out) {
-    double *killer = (double *)malloc((size_t)n * sizeof(double));
+    double *killer = (double *)calloc((size_t)n, sizeof(double));
     if (killer == NULL) {
         fprintf(stderr, "allocation failed at n=%d\n", n);
         exit(1);
