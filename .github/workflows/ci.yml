@@ -39,19 +39,29 @@ jobs:
   sanitizers:
     name: ASan + UBSan
     runs-on: ubuntu-latest
+    env:
+      CC: clang
+      CXX: clang++
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Build td_test with ASan + UBSan
+      # Build the whole test suite with sanitizers via CMake and run it through
+      # CTest, so every registered test target (not just td_test) is covered by
+      # ASan/UBSan. A non-Release build avoids the top-level "-std=c99" that would
+      # otherwise hide POSIX clock_gettime() in minunit.h.
+      - name: Configure with ASan + UBSan
         run: >
-          clang -O1 -g -std=gnu11
-          -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
-          -Isrc tests/unit/td_test.c src/tdigest.c -lm -o td_test_san
-      - name: Run
+          cmake -S . -B build-san
+          -DBUILD_TESTS=ON -DBUILD_BENCHMARK=OFF -DBUILD_EXAMPLES=OFF
+          -DCMAKE_C_FLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Build
+        run: cmake --build build-san -j"$(nproc)"
+      - name: Run all tests under sanitizers
         env:
           # A fuzzed/huge compression can request an enormous capacity; let the
           # library's allocation-failure path run instead of aborting the process.
           ASAN_OPTIONS: detect_leaks=1:allocator_may_return_null=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-        run: ./td_test_san
+        run: ctest --test-dir build-san --output-on-failure
