@@ -413,27 +413,36 @@ MU_TEST(test_nans) {
     td_free(t);
 }
 
-// td_add() rejects NaN (no total order for the centroid sort) but accepts +/-Inf, which have a
-// valid ordering and become min/max. After mixing infinities with finite values, one big
-// compress must still leave the centroids sorted.
+// td_add() rejects every non-finite mean. NaN has no ordering for the centroid sort, and +/-Inf
+// is not closed under the centroid-merge arithmetic (merging two equal infinities computes
+// Inf - Inf = NaN, poisoning a centroid). Repeated-infinity input previously produced NaN
+// centroids; rejecting it at ingest keeps every stored mean finite and the sort invariant intact.
 MU_TEST(test_add_nonfinite) {
     td_histogram_t *t = td_new(200);
     mu_assert(td_add(t, NAN, 1) == EINVAL, "td_add(NaN) must be rejected with EINVAL");
-    mu_assert(td_centroid_count(t) == 0, "rejected NaN must not be stored");
+    mu_assert(td_add(t, INFINITY, 1) == EINVAL, "td_add(+Inf) must be rejected with EINVAL");
+    mu_assert(td_add(t, -INFINITY, 1) == EINVAL, "td_add(-Inf) must be rejected with EINVAL");
+    mu_assert(td_centroid_count(t) == 0, "rejected non-finite input must not be stored");
 
-    mu_assert(td_add(t, -INFINITY, 1) == 0, "td_add(-Inf) must be accepted");
-    mu_assert(td_add(t, INFINITY, 1) == 0, "td_add(+Inf) must be accepted");
+    // The old repeated-+Inf reproducer (100 inserts -> NaN centroids) must now add nothing and
+    // leave a clean, empty digest.
+    for (int i = 0; i < 100; ++i) {
+        mu_assert(td_add(t, INFINITY, 1) == EINVAL, "repeated +Inf still rejected");
+    }
+    mu_assert(td_centroid_count(t) == 0, "repeated +Inf must leave the digest empty");
+
+    // Finite values still work and stay sorted / NaN-free after a compress.
     for (int i = 0; i < 50; ++i) {
         mu_assert(td_add(t, (double)(i - 25), 1) == 0, "finite insertion");
     }
-    mu_assert(td_add(t, NAN, 1) == EINVAL, "td_add(NaN) still rejected after other inserts");
-    mu_assert(td_compress(t) == 0, "compress with infinities present");
-    mu_assert(td_min(t) == -INFINITY, "min must be -Inf");
-    mu_assert(td_max(t) == INFINITY, "max must be +Inf");
+    mu_assert(td_compress(t) == 0, "compress finite values");
     const long long n = td_centroid_count(t);
-    for (long long i = 1; i < n; ++i) {
-        mu_assert(td_centroids_mean_at(t, (int)(i - 1)) <= td_centroids_mean_at(t, (int)i),
-                  "centroids must stay sorted with infinities present");
+    for (long long i = 0; i < n; ++i) {
+        mu_assert(isfinite(td_centroids_mean_at(t, (int)i)), "every centroid mean must be finite");
+        if (i > 0) {
+            mu_assert(td_centroids_mean_at(t, (int)(i - 1)) <= td_centroids_mean_at(t, (int)i),
+                      "centroids must stay sorted");
+        }
     }
     td_free(t);
 }

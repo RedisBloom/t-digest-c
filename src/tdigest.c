@@ -52,9 +52,12 @@ static void inline swap_l(long long *arr, int i, int j) {
 // Zero-cost unless TD_INSTRUMENT_SORT is defined at build time.
 #ifdef TD_INSTRUMENT_SORT
 unsigned long long td_sort_comparisons = 0;
+unsigned long long td_sort_heap_fallbacks = 0;
 #define TD_SORT_CMP() (++td_sort_comparisons)
+#define TD_SORT_FALLBACK() (++td_sort_heap_fallbacks)
 #else
 #define TD_SORT_CMP() ((void)0)
+#define TD_SORT_FALLBACK() ((void)0)
 #endif
 
 // Counted key comparison `a < b`. Keeping the counter inside a dedicated helper (instead of a
@@ -155,6 +158,7 @@ static double td_median3(double *means, long long *weights, int lo, int mid, int
 static void td_introsort(double *means, long long *weights, int lo, int hi, int depth_limit) {
     while (hi - lo > TD_INSORT_THRESHOLD) {
         if (depth_limit == 0) {
+            TD_SORT_FALLBACK();
             td_heap_sort(means, weights, lo, hi);
             return;
         }
@@ -680,12 +684,13 @@ double td_trimmed_mean(td_histogram_t *h, double leftmost_cut, double rightmost_
 }
 
 int td_add(td_histogram_t *h, double mean, long long weight) {
-    // Reject NaN before any mutation: the centroid sort assumes a total order over the stored
-    // means, but NaN compares false to everything, so a NaN key would leave a partition
-    // unsorted and violate td_compress()'s sorted invariant. This matches the reference
-    // t-digest, which rejects NaN in add(). +/-Inf are permitted -- they have a valid total
-    // order and are clamped into min/max.
-    if (isnan(mean)) {
+    // Reject non-finite means before any mutation. NaN has no ordering, so it would leave a
+    // partition unsorted and violate td_compress()'s sorted invariant. +/-Inf sorts fine but is
+    // not closed under the centroid-merge arithmetic: merging two equal infinities computes
+    // `delta = Inf - Inf = NaN`, poisoning a centroid mean (which then breaks a later sort).
+    // Rejecting all non-finite input at ingest keeps every stored mean finite, matching the
+    // reference t-digest (which rejects NaN in add()).
+    if (!isfinite(mean)) {
         return EINVAL;
     }
     if (should_td_compress(h)) {
