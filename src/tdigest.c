@@ -49,55 +49,175 @@ static void inline swap_l(long long *arr, int i, int j) {
     arr[j] = temp;
 }
 
-static unsigned int partition(double *means, long long *weights, unsigned int start,
-                              unsigned int end, unsigned int pivot_idx) {
-    const double pivotMean = means[pivot_idx];
-    swap(means, pivot_idx, end);
-    swap_l(weights, pivot_idx, end);
+// Optional key-comparison counter, used only by the complexity regression test.
+// Zero-cost unless TD_INSTRUMENT_SORT is defined at build time.
+#ifdef TD_INSTRUMENT_SORT
+unsigned long long td_sort_comparisons = 0;
+unsigned long long td_sort_heap_fallbacks = 0;
+#define TD_SORT_CMP() (++td_sort_comparisons)
+#define TD_SORT_FALLBACK() (++td_sort_heap_fallbacks)
+#else
+#define TD_SORT_CMP() ((void)0)
+#define TD_SORT_FALLBACK() ((void)0)
+#endif
 
-    int i = start - 1;
+// Counted key comparison `a < b`. Keeping the counter inside a dedicated helper (instead of a
+// comma expression in the && operands) leaves the sort's boolean conditions side-effect free;
+// it inlines to a plain `a < b` when TD_INSTRUMENT_SORT is off.
+static inline bool td_key_lt(double a, double b) {
+    TD_SORT_CMP();
+    return a < b;
+}
 
-    for (unsigned int j = start; j < end; j++) {
-        // If current element is smaller than the pivot
-        if (means[j] < pivotMean) {
-            // increment index of smaller element
-            i++;
-            swap(means, i, j);
-            swap_l(weights, i, j);
+#define TD_INSORT_THRESHOLD 16
+
+// Insertion sort of the inclusive range [lo, hi] (used for small ranges).
+static void td_insertion_sort(double *means, long long *weights, int lo, int hi) {
+    for (int i = lo + 1; i <= hi; i++) {
+        const double m = means[i];
+        const long long w = weights[i];
+        int j = i - 1;
+        while (j >= lo && td_key_lt(m, means[j])) {
+            means[j + 1] = means[j];
+            weights[j + 1] = weights[j];
+            j--;
         }
+        means[j + 1] = m;
+        weights[j + 1] = w;
     }
-    swap(means, i + 1, end);
-    swap_l(weights, i + 1, end);
-    return i + 1;
+}
+
+// Max-heap sift-down over the range starting at `lo` (heap size `n`, root heap
+// index `i`), keyed on means with weights moved in lock-step.
+static void td_sift_down(double *means, long long *weights, int lo, int i, int n) {
+    // Internal nodes are [0, n/2); index >= n/2 is a leaf. Testing leaf-ness BEFORE forming
+    // 2*i+1 keeps the child index from overflowing signed int when n approaches INT_MAX (a
+    // capacity #41 permits): for i < n/2, 2*i < n so 2*i+1 <= n and cannot overflow.
+    while (i < n / 2) {
+        int child = 2 * i + 1;
+        if (child + 1 < n && td_key_lt(means[lo + child], means[lo + child + 1])) {
+            child++;
+        }
+        if (!td_key_lt(means[lo + i], means[lo + child])) {
+            break;
+        }
+        swap(means, lo + i, lo + child);
+        swap_l(weights, lo + i, lo + child);
+        i = child;
+    }
+}
+
+// Heapsort of the inclusive range [lo, hi]: the O(n log n) worst-case fallback.
+static void td_heap_sort(double *means, long long *weights, int lo, int hi) {
+    const int n = hi - lo + 1;
+    for (int i = n / 2 - 1; i >= 0; i--) {
+        td_sift_down(means, weights, lo, i, n);
+    }
+    for (int end = n - 1; end > 0; end--) {
+        swap(means, lo, lo + end);
+        swap_l(weights, lo, lo + end);
+        td_sift_down(means, weights, lo, 0, end);
+    }
+}
+
+// Move the median of means[lo], means[mid], means[hi] into `mid` (weights follow)
+// and return it, so an already-sorted / organ-pipe input does not pick a bad pivot.
+static double td_median3(double *means, long long *weights, int lo, int mid, int hi) {
+    if (td_key_lt(means[mid], means[lo])) {
+        swap(means, lo, mid);
+        swap_l(weights, lo, mid);
+    }
+    if (td_key_lt(means[hi], means[lo])) {
+        swap(means, lo, hi);
+        swap_l(weights, lo, hi);
+    }
+    if (td_key_lt(means[hi], means[mid])) {
+        swap(means, mid, hi);
+        swap_l(weights, mid, hi);
+    }
+    return means[mid];
 }
 
 /**
- * Standard quick sort except that sorting rearranges parallel arrays
+ * Introsort over two parallel arrays keyed on `means` (weights permuted in
+ * lock-step). Guaranteed O(n log n) time and O(log n) stack:
+ *   - 3-way (Dutch-flag) partitioning collapses runs of equal keys in a single
+ *     pass -- t-digest's common duplicate-heavy input;
+ *   - a median-of-three pivot avoids the trivial already-sorted worst case;
+ *   - a recursion-depth limit falls back to heapsort, so an adversarial
+ *     distinct-value permutation crafted to defeat the pivot (which a
+ *     fixed-position pivot cannot resist) cannot force quadratic time;
+ *   - small ranges finish with insertion sort;
+ *   - recursing only the smaller side bounds the stack to O(log n).
  *
- * @param means  Values to sort on
- * @param weights The auxillary values to sort.
- * @param start  The beginning of the values to sort
- * @param end    The value after the last value to sort
+ * Note: this is NOT output-identical to a naive single-pivot sort for runs of
+ * equal keys -- the order within an equal-key run differs, which can change how
+ * weighted duplicate centroids are subsequently merged. Results stay within
+ * t-digest's accuracy guarantee; exact centroid-for-centroid reproduction of the
+ * old sorter is not preserved.
  */
-static void td_qsort(double *means, long long *weights, unsigned int start, unsigned int end) {
-    if (start < end) {
-        // two elements can be directly compared
-        if ((end - start) == 1) {
-            if (means[start] > means[end]) {
-                swap(means, start, end);
-                swap_l(weights, start, end);
-            }
+static void td_introsort(double *means, long long *weights, int lo, int hi, int depth_limit) {
+    while (hi - lo > TD_INSORT_THRESHOLD) {
+        if (depth_limit == 0) {
+            TD_SORT_FALLBACK();
+            td_heap_sort(means, weights, lo, hi);
             return;
         }
-        // generating a random number as a pivot was very expensive vs the array size
-        // const unsigned int pivot_idx = start + rand()%(end - start + 1);
-        const unsigned int pivot_idx = (end + start) / 2; // central pivot
-        const unsigned int new_pivot_idx = partition(means, weights, start, end, pivot_idx);
-        if (new_pivot_idx > start) {
-            td_qsort(means, weights, start, new_pivot_idx - 1);
+        depth_limit--;
+        const int mid = lo + (hi - lo) / 2;
+        const double pivot = td_median3(means, weights, lo, mid, hi);
+        // While scanning: [lo, lt) < pivot, [lt, i) == pivot, (gt, hi] > pivot.
+        int lt = lo;
+        int i = lo;
+        int gt = hi;
+        while (i <= gt) {
+            const double v = means[i];
+            if (td_key_lt(v, pivot)) {
+                swap(means, i, lt);
+                swap_l(weights, i, lt);
+                lt++;
+                i++;
+            } else if (td_key_lt(pivot, v)) {
+                swap(means, i, gt);
+                swap_l(weights, i, gt);
+                gt--;
+            } else {
+                i++;
+            }
         }
-        td_qsort(means, weights, new_pivot_idx + 1, end);
+        const int left_size = lt - lo;  // count of elements < pivot
+        const int right_size = hi - gt; // count of elements > pivot
+        // Recurse the smaller side, loop on the larger (bounds the stack).
+        if (left_size < right_size) {
+            if (left_size > 1) {
+                td_introsort(means, weights, lo, lt - 1, depth_limit);
+            }
+            lo = gt + 1;
+        } else {
+            if (right_size > 1) {
+                td_introsort(means, weights, gt + 1, hi, depth_limit);
+            }
+            hi = lt - 1;
+        }
     }
+    td_insertion_sort(means, weights, lo, hi);
+}
+
+static void td_qsort(double *means, long long *weights, unsigned int lo_u, unsigned int hi_u) {
+    // Indices fit an int: the node arrays are sized by `cap` (an int field), so
+    // the sorted range is always within [0, node_count).
+    const int lo = (int)lo_u;
+    const int hi = (int)hi_u;
+    if (lo >= hi) {
+        return;
+    }
+    // Depth limit = 2*floor(log2(n)); exceeding it hands the range to heapsort,
+    // which is what guarantees the O(n log n) worst case.
+    int depth_limit = 0;
+    for (int t = hi - lo + 1; t > 1; t >>= 1) {
+        depth_limit += 2;
+    }
+    td_introsort(means, weights, lo, hi, depth_limit);
 }
 
 static inline uint64_t cap_from_compression(uint64_t compression) {
@@ -589,6 +709,15 @@ double td_trimmed_mean(td_histogram_t *h, double leftmost_cut, double rightmost_
 }
 
 int td_add(td_histogram_t *h, double mean, long long weight) {
+    // Reject non-finite means before any mutation. NaN has no ordering, so it would leave a
+    // partition unsorted and violate td_compress()'s sorted invariant. +/-Inf sorts fine but is
+    // not closed under the centroid-merge arithmetic: merging two equal infinities computes
+    // `delta = Inf - Inf = NaN`, poisoning a centroid mean (which then breaks a later sort).
+    // Rejecting all non-finite input at ingest keeps every stored mean finite, matching the
+    // reference t-digest (which rejects NaN in add()).
+    if (!isfinite(mean)) {
+        return EINVAL;
+    }
     if (should_td_compress(h)) {
         const int overflow_res = td_compress(h);
         if (overflow_res != 0)

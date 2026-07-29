@@ -414,6 +414,40 @@ MU_TEST(test_nans) {
     td_free(t);
 }
 
+// td_add() rejects every non-finite mean. NaN has no ordering for the centroid sort, and +/-Inf
+// is not closed under the centroid-merge arithmetic (merging two equal infinities computes
+// Inf - Inf = NaN, poisoning a centroid). Repeated-infinity input previously produced NaN
+// centroids; rejecting it at ingest keeps every stored mean finite and the sort invariant intact.
+MU_TEST(test_add_nonfinite) {
+    td_histogram_t *t = td_new(200);
+    mu_assert(td_add(t, NAN, 1) == EINVAL, "td_add(NaN) must be rejected with EINVAL");
+    mu_assert(td_add(t, INFINITY, 1) == EINVAL, "td_add(+Inf) must be rejected with EINVAL");
+    mu_assert(td_add(t, -INFINITY, 1) == EINVAL, "td_add(-Inf) must be rejected with EINVAL");
+    mu_assert(td_centroid_count(t) == 0, "rejected non-finite input must not be stored");
+
+    // The old repeated-+Inf reproducer (100 inserts -> NaN centroids) must now add nothing and
+    // leave a clean, empty digest.
+    for (int i = 0; i < 100; ++i) {
+        mu_assert(td_add(t, INFINITY, 1) == EINVAL, "repeated +Inf still rejected");
+    }
+    mu_assert(td_centroid_count(t) == 0, "repeated +Inf must leave the digest empty");
+
+    // Finite values still work and stay sorted / NaN-free after a compress.
+    for (int i = 0; i < 50; ++i) {
+        mu_assert(td_add(t, (double)(i - 25), 1) == 0, "finite insertion");
+    }
+    mu_assert(td_compress(t) == 0, "compress finite values");
+    const long long n = td_centroid_count(t);
+    for (long long i = 0; i < n; ++i) {
+        mu_assert(isfinite(td_centroids_mean_at(t, (int)i)), "every centroid mean must be finite");
+        if (i > 0) {
+            mu_assert(td_centroids_mean_at(t, (int)(i - 1)) <= td_centroids_mean_at(t, (int)i),
+                      "centroids must stay sorted");
+        }
+    }
+    td_free(t);
+}
+
 MU_TEST(test_two_interp) {
     td_histogram_t *t = td_new(1000);
     mu_assert(td_add(t, 1, 1) == 0, "Insertion");
@@ -595,6 +629,98 @@ MU_TEST(test_quantiles_multiple) {
     td_free(t);
 }
 
+// Exercises the centroid sort on the inputs that were pathological for the old
+// single-pivot quicksort: all-equal, ascending, and descending. The 3-way sort
+// must produce a correctly ordered, correct-weight digest for each. (The old
+// sort was O(n^2)/O(n)-stack on the all-equal case; this guards correctness of
+// the replacement.)
+MU_TEST(test_duplicate_heavy_compress) {
+    const int n = 50000;
+
+    // All-equal: everything collapses onto a single value.
+    td_histogram_t *eq = td_new(200);
+    mu_assert(eq != NULL, "created_histogram");
+    for (int i = 0; i < n; ++i) {
+        mu_assert(td_add(eq, 42.0, 1) == 0, "Insertion");
+    }
+    mu_assert(td_compress(eq) == 0, "compress all-equal");
+    mu_assert_double_eq((double)n, td_size(eq));
+    mu_assert_double_eq(42.0, td_min(eq));
+    mu_assert_double_eq(42.0, td_max(eq));
+    mu_assert_double_eq(42.0, td_quantile(eq, 0.0));
+    mu_assert_double_eq(42.0, td_quantile(eq, 0.5));
+    mu_assert_double_eq(42.0, td_quantile(eq, 1.0));
+    // Merged centroid means must be non-decreasing.
+    for (int i = 1; i < eq->merged_nodes; ++i) {
+        mu_assert(eq->nodes_mean[i - 1] <= eq->nodes_mean[i], "means sorted (all-equal)");
+    }
+    td_free(eq);
+
+    // Ascending and descending must yield the same digest bounds.
+    td_histogram_t *asc = td_new(200);
+    td_histogram_t *desc = td_new(200);
+    mu_assert(asc != NULL && desc != NULL, "created_histograms");
+    for (int i = 0; i < n; ++i) {
+        mu_assert(td_add(asc, (double)i, 1) == 0, "Insertion asc");
+        mu_assert(td_add(desc, (double)(n - 1 - i), 1) == 0, "Insertion desc");
+    }
+    mu_assert(td_compress(asc) == 0, "compress asc");
+    mu_assert(td_compress(desc) == 0, "compress desc");
+    mu_assert_double_eq(0.0, td_min(asc));
+    mu_assert_double_eq((double)(n - 1), td_max(asc));
+    mu_assert_double_eq(0.0, td_min(desc));
+    mu_assert_double_eq((double)(n - 1), td_max(desc));
+    for (int i = 1; i < asc->merged_nodes; ++i) {
+        mu_assert(asc->nodes_mean[i - 1] <= asc->nodes_mean[i], "means sorted (asc)");
+    }
+    for (int i = 1; i < desc->merged_nodes; ++i) {
+        mu_assert(desc->nodes_mean[i - 1] <= desc->nodes_mean[i], "means sorted (desc)");
+    }
+    // The median of a dense uniform 0..n-1 sits near the middle for both orders.
+    mu_assert_double_eq_epsilon((double)(n - 1) / 2.0, td_quantile(asc, 0.5), (double)n * 0.02);
+    mu_assert_double_eq_epsilon((double)(n - 1) / 2.0, td_quantile(desc, 0.5), (double)n * 0.02);
+    td_free(asc);
+    td_free(desc);
+}
+
+// Weighted duplicates exercise how runs of equal keys are merged after sorting.
+// The introsort changes the intra-run order relative to a naive single-pivot
+// sort (so the digest is NOT centroid-for-centroid identical), but the result
+// must stay accurate. Uses a distribution whose quantiles are known exactly.
+MU_TEST(test_weighted_duplicates_accuracy) {
+    td_histogram_t *t = td_new(200);
+    mu_assert(t != NULL, "created_histogram");
+    // 5 distinct values, each carrying equal weight, inserted as several weighted
+    // duplicates so the same mean appears in multiple centroids before merging.
+    const double vals[5] = {1.0, 2.0, 3.0, 4.0, 5.0};
+    long long total = 0;
+    for (int rep = 0; rep < 4; ++rep) {
+        for (int i = 0; i < 5; ++i) {
+            mu_assert(td_add(t, vals[i], 150) == 0, "weighted duplicate insertion");
+            total += 150;
+        }
+    }
+    mu_assert(td_compress(t) == 0, "compress");
+    mu_assert_double_eq(1.0, td_min(t));
+    mu_assert_double_eq(5.0, td_max(t));
+    mu_assert_long_eq(total, td_size(t)); // 3000, weight fully accounted
+    // Each value holds exactly 20% of the mass, so the median is 3 and the
+    // quantiles land on the values (within interpolation tolerance).
+    mu_assert_double_eq_epsilon(1.0, td_quantile(t, 0.05), 0.6);
+    mu_assert_double_eq_epsilon(3.0, td_quantile(t, 0.5), 0.6);
+    mu_assert_double_eq_epsilon(5.0, td_quantile(t, 0.95), 0.6);
+    // CDF stays in [0,1] and non-decreasing across the support.
+    double prev = -1.0;
+    for (int step = 0; step <= 12; ++step) {
+        const double x = 0.5 * (double)step;
+        const double c = td_cdf(t, x);
+        mu_assert(c >= 0.0 && c <= 1.0, "cdf within [0,1]");
+        mu_assert(c >= prev - 1e-9, "cdf non-decreasing");
+        prev = c;
+    }
+    td_free(t);
+}
+
 // td_free must tolerate NULL: this PR makes td_new() return NULL for invalid
 // compression, so td_free(td_new(bad)) is a natural cleanup pattern.
 MU_TEST(test_td_free_null) {
@@ -694,6 +820,7 @@ MU_TEST_SUITE(test_suite) {
     MU_RUN_TEST(test_compress_small);
     MU_RUN_TEST(test_compress_large);
     MU_RUN_TEST(test_nans);
+    MU_RUN_TEST(test_add_nonfinite);
     MU_RUN_TEST(test_negative_values);
     MU_RUN_TEST(test_negative_values_merge);
     MU_RUN_TEST(test_large_outlier_test);
@@ -709,6 +836,8 @@ MU_TEST_SUITE(test_suite) {
     MU_RUN_TEST(test_trimmed_mean_complex);
     MU_RUN_TEST(test_overflow);
     MU_RUN_TEST(test_overflow_merge);
+    MU_RUN_TEST(test_duplicate_heavy_compress);
+    MU_RUN_TEST(test_weighted_duplicates_accuracy);
 }
 
 int main(int argc, char *argv[]) {
