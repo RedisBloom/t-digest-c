@@ -521,8 +521,9 @@ MU_TEST(test_td_init) {
     mu_assert_long_eq(0, td_init(1000000, &t));
     td_free(t);
 
-    mu_assert_long_eq(0, td_init(100000000, &t));
-    td_free(t);
+    // The exact accepted/rejected capacity boundary is covered by td_capacity_test, which
+    // exercises the no-alloc capacity helper directly instead of committing the ~34 GB (~32 GiB)
+    // the largest accepted compression would allocate here.
 }
 
 MU_TEST(test_quantiles) {
@@ -594,9 +595,102 @@ MU_TEST(test_quantiles_multiple) {
     td_free(t);
 }
 
+// td_free must tolerate NULL: this PR makes td_new() return NULL for invalid
+// compression, so td_free(td_new(bad)) is a natural cleanup pattern.
+MU_TEST(test_td_free_null) {
+    td_free(NULL);         // must not crash
+    td_free(td_new(-1.0)); // td_new returns NULL for invalid compression
+    td_free(td_new(NAN));
+}
+
+// The td_new() convenience wrapper must reject the same inputs as td_init().
+MU_TEST(test_td_new_rejects_bad_compression) {
+    mu_assert(td_new(NAN) == NULL, "td_new(NaN) must return NULL");
+    mu_assert(td_new(INFINITY) == NULL, "td_new(INF) must return NULL");
+    mu_assert(td_new(-1) == NULL, "td_new(-1) must return NULL");
+    mu_assert(td_new(0) == NULL, "td_new(0) must return NULL");
+    mu_assert(td_new((double)(((INT_MAX - 10) / 6) + 1)) == NULL,
+              "td_new above the capacity boundary must return NULL");
+}
+
+// td_init must leave *result untouched on failure (stronger than "stays NULL":
+// a sentinel proves td_init never writes the out-param on a rejected input).
+MU_TEST(test_td_init_result_untouched_on_failure) {
+    td_histogram_t sentinel_obj;
+    td_histogram_t *const sentinel = &sentinel_obj;
+    td_histogram_t *t;
+    t = sentinel;
+    mu_assert_long_eq(1, td_init(NAN, &t));
+    mu_assert(t == sentinel, "NaN: *result must be left untouched");
+    t = sentinel;
+    mu_assert_long_eq(1, td_init(0, &t));
+    mu_assert(t == sentinel, "zero: *result must be left untouched");
+    t = sentinel;
+    mu_assert_long_eq(1, td_init((double)(((INT_MAX - 10) / 6) + 1), &t));
+    mu_assert(t == sentinel, "overflow: *result must be left untouched");
+}
+
+// Capacity formula (cap = 6*compression + 10) and determinism at safe sizes,
+// plus the current behavior for sub-1 / fractional compression (accepted, floored).
+MU_TEST(test_td_init_cap_and_determinism) {
+    td_histogram_t *a = NULL, *b = NULL;
+    mu_assert_long_eq(0, td_init(1, &a));
+    mu_assert_long_eq(16, a->cap); // 6*1 + 10
+    td_free(a);
+    a = NULL;
+    mu_assert_long_eq(0, td_init(2, &a));
+    mu_assert_long_eq(22, a->cap); // 6*2 + 10
+    td_free(a);
+    a = NULL;
+    // determinism: same compression -> same cap
+    mu_assert_long_eq(0, td_init(500, &a));
+    mu_assert_long_eq(0, td_init(500, &b));
+    mu_assert_long_eq(3010, a->cap); // 6*500 + 10
+    mu_assert_long_eq(a->cap, b->cap);
+    td_free(a);
+    td_free(b);
+    // Sub-1 / fractional compression is currently ACCEPTED and floored to 0,
+    // yielding cap 10 (6*0 + 10); td_compression() then reports (int)0.5 == 0.
+    // Pins today's behavior (see PR discussion on whether to reject compression < 1).
+    a = NULL;
+    mu_assert_long_eq(0, td_init(0.5, &a));
+    mu_assert_long_eq(10, a->cap);
+    mu_assert_int_eq(0, td_compression(a));
+    td_free(a);
+}
+
+// A large but valid digest (compression 100000 -> cap 600010, ~9.6 MB) must not
+// just allocate but actually work end to end.
+MU_TEST(test_td_init_large_success_is_usable) {
+    td_histogram_t *t = NULL;
+    mu_assert_long_eq(0, td_init(100000, &t));
+    mu_assert(t != NULL, "large valid compression should allocate");
+    mu_assert_long_eq(600010, t->cap); // 6*100000 + 10
+    for (int i = 1; i <= 10000; ++i) {
+        mu_assert(td_add(t, (double)i, 1) == 0, "Insertion");
+    }
+    mu_assert(td_compress(t) == 0, "compress large digest");
+    mu_assert_double_eq(1.0, td_min(t));
+    mu_assert_double_eq(10000.0, td_max(t));
+    mu_assert_long_eq(10000, td_size(t));
+    mu_assert(td_centroid_count(t) <= t->cap, "centroid count must stay within cap");
+    // Store the result and assert it is finite first: mu_assert_double_eq_epsilon does NOT fail
+    // for NaN (fabs(expected - NaN) is NaN, and NaN > epsilon is false), so the epsilon check
+    // alone would pass even if td_quantile() returned NaN.
+    const double median = td_quantile(t, 0.5);
+    mu_assert(isfinite(median), "median must be finite");
+    mu_assert_double_eq_epsilon(5000.5, median, 50.0);
+    td_free(t);
+}
+
 MU_TEST_SUITE(test_suite) {
     MU_RUN_TEST(test_basic);
     MU_RUN_TEST(test_td_init);
+    MU_RUN_TEST(test_td_free_null);
+    MU_RUN_TEST(test_td_new_rejects_bad_compression);
+    MU_RUN_TEST(test_td_init_result_untouched_on_failure);
+    MU_RUN_TEST(test_td_init_cap_and_determinism);
+    MU_RUN_TEST(test_td_init_large_success_is_usable);
     MU_RUN_TEST(test_compress_small);
     MU_RUN_TEST(test_compress_large);
     MU_RUN_TEST(test_nans);
