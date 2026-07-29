@@ -16,8 +16,9 @@ endif()
 if (BUILD_TESTS)
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -std=c99")
     add_executable(td_test unit/td_test.c unit/minunit.h)
-    # minunit.h uses clock_gettime(), hidden by the top-level -std=c99 unless
-    # _POSIX_C_SOURCE is defined on the command line before any header.
+    # minunit.h uses clock_gettime(), which the top-level "-std=c99" hides unless
+    # _POSIX_C_SOURCE is defined on the command line (before any header is included).
+    # Without this the td_test build fails with "unknown type name 'clockid_t'".
     target_compile_definitions(td_test PRIVATE _POSIX_C_SOURCE=200809L)
     target_link_libraries(td_test tdigest m)
     enable_testing()

@@ -4,6 +4,7 @@
 #include <math.h>
 #include "tdigest.h"
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 
 #ifndef TD_MALLOC_INCLUDE
@@ -219,12 +220,8 @@ static void td_qsort(double *means, long long *weights, unsigned int lo_u, unsig
     td_introsort(means, weights, lo, hi, depth_limit);
 }
 
-static inline size_t cap_from_compression(double compression) {
-    if ((size_t)compression > ((SIZE_MAX / sizeof(double) / 6) - 10)) {
-        return 0;
-    }
-
-    return (6 * (size_t)(compression)) + 10;
+static inline uint64_t cap_from_compression(uint64_t compression) {
+    return (UINT64_C(6) * compression) + UINT64_C(10);
 }
 
 static inline bool should_td_compress(td_histogram_t *h) {
@@ -277,10 +274,17 @@ void td_reset(td_histogram_t *h) {
 
 int td_init(double compression, td_histogram_t **result) {
 
-    const size_t capacity = cap_from_compression(compression);
-    if (capacity < 1) {
+    // Compute capacity in an explicitly 64-bit type so 6 * compression + 10 cannot wrap at the
+    // width of int or size_t before it is validated. cap and the node indexes are stored as int.
+    if (!isfinite(compression) || compression <= 0 || compression > INT_MAX) {
         return 1;
     }
+    const uint64_t capacity64 = cap_from_compression((uint64_t)compression);
+    if (capacity64 > INT_MAX || capacity64 > SIZE_MAX / sizeof(double) ||
+        capacity64 > SIZE_MAX / sizeof(long long)) {
+        return 1;
+    }
+    const size_t capacity = (size_t)capacity64;
     td_histogram_t *histogram;
     histogram = (td_histogram_t *)td_malloc_(sizeof(td_histogram_t));
     if (!histogram) {
@@ -288,7 +292,7 @@ int td_init(double compression, td_histogram_t **result) {
     }
     histogram->nodes_mean = NULL;
     histogram->nodes_weight = NULL;
-    histogram->cap = capacity;
+    histogram->cap = (int)capacity;
     histogram->compression = (double)compression;
     td_reset(histogram);
     histogram->nodes_mean = (double *)td_calloc_(capacity, sizeof(double));
