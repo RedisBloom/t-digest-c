@@ -62,7 +62,9 @@ extern "C" {
  * 1000 is extremely large.
  * The number of centroids retained will be a smallish (usually less than 10) multiple of this
  * number.
- * @return the histogram on success, NULL if allocation failed.
+ * @return the histogram on success, NULL if `compression` is invalid (non-finite, <= 0, or so
+ * large that the centroid capacity would overflow) or if allocation failed. Because NULL is a
+ * valid return, `td_free(td_new(...))` is a safe cleanup idiom (td_free() tolerates NULL).
  */
 td_histogram_t *td_new(double compression);
 
@@ -74,15 +76,19 @@ td_histogram_t *td_new(double compression);
  * 1000 is extremely large.
  * The number of centroids retained will be a smallish (usually less than 10) multiple of this
  * number.
- * @param result Output parameter to capture allocated histogram.
- * @return 0 on success, 1 if allocation failed.
+ * @param result Output parameter to capture allocated histogram. On success `*result` is set to
+ * the new histogram; on failure `*result` is left untouched (never written), so a caller may seed
+ * it with a sentinel to distinguish "not written" from NULL.
+ * @return 0 on success, 1 if `compression` is invalid (non-finite, <= 0, or so large that the
+ * centroid capacity would overflow) or if allocation failed.
  */
 int td_init(double compression, td_histogram_t **result);
 
 /**
  * Frees the memory associated with the t-digest.
  *
- * @param h The histogram you want to free.
+ * @param h The histogram you want to free. Passing NULL is allowed and is a no-op, so the
+ * `td_free(td_new(...))` idiom is safe even when td_new() returns NULL.
  */
 void td_free(td_histogram_t *h);
 

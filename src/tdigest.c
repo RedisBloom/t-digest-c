@@ -224,6 +224,26 @@ static inline uint64_t cap_from_compression(uint64_t compression) {
     return (UINT64_C(6) * compression) + UINT64_C(10);
 }
 
+// Validate `compression` and compute the node-array capacity (cap = 6*compression + 10)
+// entirely in 64-bit width, WITHOUT allocating. Factored out of td_init() so the
+// accepted/rejected boundary can be probed in a test without committing tens of GiB of
+// backing storage (at cap ~ INT_MAX the two 8-byte node arrays total ~34 GB / ~32 GiB).
+// Returns 0 and writes *capacity on success; returns 1 on rejection and leaves *capacity
+// untouched. Rejections: non-finite, <= 0, > INT_MAX, or a capacity that would overflow int
+// or a size_t element count for either node array.
+static inline int capacity_from_compression(double compression, size_t *capacity) {
+    if (!isfinite(compression) || compression <= 0 || compression > INT_MAX) {
+        return 1;
+    }
+    const uint64_t capacity64 = cap_from_compression((uint64_t)compression);
+    if (capacity64 > INT_MAX || capacity64 > SIZE_MAX / sizeof(double) ||
+        capacity64 > SIZE_MAX / sizeof(long long)) {
+        return 1;
+    }
+    *capacity = (size_t)capacity64;
+    return 0;
+}
+
 static inline bool should_td_compress(td_histogram_t *h) {
     return ((h->merged_nodes + h->unmerged_nodes) >= (h->cap - 1));
 }
@@ -274,17 +294,12 @@ void td_reset(td_histogram_t *h) {
 
 int td_init(double compression, td_histogram_t **result) {
 
-    // Compute capacity in an explicitly 64-bit type so 6 * compression + 10 cannot wrap at the
-    // width of int or size_t before it is validated. cap and the node indexes are stored as int.
-    if (!isfinite(compression) || compression <= 0 || compression > INT_MAX) {
+    // Validate compression and size the node arrays in 64-bit width before narrowing to int
+    // (see capacity_from_compression). On rejection *result is left untouched.
+    size_t capacity;
+    if (capacity_from_compression(compression, &capacity) != 0) {
         return 1;
     }
-    const uint64_t capacity64 = cap_from_compression((uint64_t)compression);
-    if (capacity64 > INT_MAX || capacity64 > SIZE_MAX / sizeof(double) ||
-        capacity64 > SIZE_MAX / sizeof(long long)) {
-        return 1;
-    }
-    const size_t capacity = (size_t)capacity64;
     td_histogram_t *histogram;
     histogram = (td_histogram_t *)td_malloc_(sizeof(td_histogram_t));
     if (!histogram) {
@@ -317,6 +332,12 @@ td_histogram_t *td_new(double compression) {
 }
 
 void td_free(td_histogram_t *histogram) {
+    // NULL guard: td_new() returns NULL for invalid compression (non-finite / <= 0 /
+    // cap > INT_MAX) or allocation failure, so the idiomatic td_free(td_new(bad)) cleanup
+    // would otherwise dereference NULL. (td_new()'s validation landed in #41.)
+    if (!histogram) {
+        return;
+    }
     if (histogram->nodes_mean) {
         td_free_((void *)(histogram->nodes_mean));
     }

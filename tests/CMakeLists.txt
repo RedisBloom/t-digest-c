@@ -32,7 +32,16 @@ if (BUILD_TESTS)
     target_compile_definitions(td_sort_complexity_test PRIVATE TD_INSTRUMENT_SORT)
     target_link_libraries(td_sort_complexity_test m)
     add_test(td_sort_complexity_test td_sort_complexity_test)
-endif()
 
+    # Capacity-boundary regression: includes tdigest.c to drive the allocation-free
+    # capacity_from_compression() helper at the exact accepted/rejected boundary without
+    # allocating the ~34 GB (~32 GiB) that the largest accepted compression would need.
+    # Use CMAKE_CURRENT_LIST_DIR so the src path stays correct when t-digest-c is consumed
+    # via add_subdirectory() (CMAKE_SOURCE_DIR would point at the outermost project).
+    add_executable(td_capacity_test unit/td_capacity_test.c)
+    target_include_directories(td_capacity_test PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../src)
+    target_link_libraries(td_capacity_test m)
+    add_test(td_capacity_test td_capacity_test)
+endif()
 
 
